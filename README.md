@@ -1,6 +1,6 @@
 <div align="center">
 
-<h3><code>naveen@github ~ $ ./contributions.sh</code></h3>
+<h3><code>naveen@github</code></h3>
 
 <img src="./assets/generated/contributions.svg" width="100%" alt="GitHub contributions in the last year" />
 

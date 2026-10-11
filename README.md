@@ -16,8 +16,8 @@
 
 <br/>
 
-<a href="https://YOUR-PORTFOLIO.com"><img src="https://img.shields.io/badge/PORTFOLIO-YOUR--PORTFOLIO.com-FFFFFF?style=for-the-badge&labelColor=555555&logo=vercel&logoColor=white" alt="Portfolio" /></a>
-<a href="https://www.linkedin.com/in/YOUR-LINKEDIN"><img src="https://img.shields.io/badge/LINKEDIN-YOUR--LINKEDIN-0A66C2?style=for-the-badge&labelColor=555555&logo=linkedin&logoColor=white" alt="LinkedIn" /></a>
+<a href="https://www.naveenhub.dev/"><img src="https://img.shields.io/badge/Naveen--PORTFOLIO.com-FFFFFF?style=for-the-badge&labelColor=555555&logo=vercel&logoColor=white" alt="Portfolio" /></a>
+<a href="www.linkedin.com/in/naveen-k-bb11372a5"><img src="https://img.shields.io/badge/NAaveen--LINKEDIN-0A66C2?style=for-the-badge&labelColor=555555&logo=linkedin&logoColor=white" alt="LinkedIn" /></a>
 <a href="mailto:kanagunaveen21@gmail.com"><img src="https://img.shields.io/badge/EMAIL-kanagunaveen21@gmail.com-D14836?style=for-the-badge&labelColor=555555&logo=gmail&logoColor=white" alt="Email" /></a>
 
 </div>

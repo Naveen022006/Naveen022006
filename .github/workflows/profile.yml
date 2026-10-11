@@ -1,0 +1,45 @@
+name: Update profile animations
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"      # every 6 hours
+  workflow_dispatch:            # lets you run it manually from the Actions tab
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - "assets/portrait.*"
+      - ".github/workflows/profile.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Pillow
+        run: pip install pillow
+
+      - name: Generate SVGs
+        run: python scripts/generate_profile.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_USER: ${{ github.repository_owner }}
+          HANDLE: naveen              # name shown before @github in the terminal
+          DISPLAY_NAME: "Naveen K"    # name printed after `whoami`
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/generated
+          git diff --cached --quiet || git commit -m "chore: update profile animations"
+          git push

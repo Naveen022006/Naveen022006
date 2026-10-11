@@ -6,7 +6,7 @@
 
 <p><b><code>Naveen022006@github ~ $ whoami</code></b></p>
 
-<img src="./assets/generated/whoami.svg" width="100%" alt="Portrait and GitHub stats" />
+<img src="./assets/generated/whoami.svg" width="100%" alt="I AM NAVEEN name animation and GitHub stats" />
 
 <p><b><code>Naveen022006@github ~ $ ./links.sh</code></b></p>
 

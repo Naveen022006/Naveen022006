@@ -2,14 +2,13 @@
 """
 Generates animated terminal-style profile SVGs:
   assets/generated/contributions.svg  (animated contribution heatmap)
-  assets/generated/whoami.svg         (ASCII portrait + animated stats dashboard)
+  assets/generated/whoami.svg         ("I AM NAVEEN" name animation + animated stats dashboard)
 
 Env vars:
   GH_TOKEN      GitHub token (Actions provides secrets.GITHUB_TOKEN)
   GH_USER       GitHub username
   HANDLE        name shown in the terminal prompts (default: naveen)
   DISPLAY_NAME  name printed after `whoami` (default: Naveen K)
-  PORTRAIT_INVERT  "1" / "0" to force-invert the ASCII portrait (default: auto)
 
 Local test:  python scripts/generate_profile.py --mock [--static]
 """
@@ -22,6 +21,7 @@ W = 830
 T = 14  # animation loop length in seconds
 FONT = 'ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace'
 LEVELS = ["#161b22", "#0e4429", "#006d32", "#26a641", "#39d353"]
+FLASH = "#aff5b4"  # colour a name dot flashes before settling to its green
 
 # ----------------------------------------------------------------- data ----
 QUERY = """query($login:String!){user(login:$login){contributionsCollection{
@@ -119,10 +119,16 @@ class Anim:
             self.css.append(f"@keyframes {name}{{{body}}}.{name}{{animation-name:{name}}}")
         return self.rules[key]
 
-    def cls(self, kind, s, dur=1.2, final=True, e=None):
+    def cls(self, kind, s, dur=1.2, final=True, e=None, fill=None):
         if self.static:
             return ""
         s = round(min(s, 85), 2)
+        if kind == "pop":  # pop in with a bright flash, then settle to `fill`
+            body = (f"0%,{s}%{{opacity:0;fill:{FLASH};transform:scale(.3)}}"
+                    f"{round(s+.8,2)}%{{opacity:1;fill:{FLASH};transform:scale(1)}}"
+                    f"{round(s+dur,2)}%,90%{{opacity:1;fill:{fill};transform:scale(1)}}"
+                    f"94%,100%{{opacity:0;fill:{fill};transform:scale(1)}}")
+            return "a p " + self._get((kind, s, dur, fill), body)
         if kind == "fade":
             body = (f"0%,{s}%{{opacity:0}}{round(s+dur,2)}%,90%{{opacity:1}}94%,100%{{opacity:0}}")
             return "a " + self._get((kind, s, dur), body)
@@ -140,6 +146,13 @@ class Anim:
             return "a " + self._get((kind, s, e, final), body)
         raise ValueError(kind)
 
+    def sweep(self, s, e, dx):
+        """Slide an element right by dx px between s% and e% of the loop."""
+        if self.static:
+            return ""
+        body = f"0%,{s}%{{transform:translateX(0)}}{e}%,100%{{transform:translateX({dx}px)}}"
+        return "a sw " + self._get(("sweep", s, e, dx), body)
+
     def style(self):
         if self.static:
             return ""
@@ -147,6 +160,8 @@ class Anim:
                 f"animation-timing-function:linear;animation-fill-mode:both}}"
                 ".g{transform-box:fill-box;transform-origin:50% 100%;"
                 "animation-timing-function:cubic-bezier(.2,.8,.2,1)}"
+                ".p{transform-box:fill-box;transform-origin:50% 50%}"
+                ".sw{animation-timing-function:cubic-bezier(.45,0,.25,1)}"
                 "@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}"
                 ".cur{animation:blink 1s steps(1) infinite}"
                 "@media (prefers-reduced-motion:reduce){.a,.cur{animation:none!important}}")
@@ -196,78 +211,100 @@ def build_contributions(weeks, st, anim, handle):
             + "".join(parts) + "</svg>")
 
 
-# ---------------------------------------------------------- ASCII art ----
-RAMP = " .,:;i1tfLCG08@"
+# -------------------------------------------------------- name banner ----
+BANNER = ("I AM", "NAVEEN")  # one entry per line, drawn on a contribution-style grid
+GLYPHS = {  # 5x7 dot-matrix letters (only the ones BANNER uses)
+    "I": ("###", ".#.", ".#.", ".#.", ".#.", ".#.", "###"),
+    "A": (".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"),
+    "M": ("#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"),
+    "N": ("#...#", "#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#"),
+    "V": ("#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."),
+    "E": ("#####", "#....", "#....", "####.", "#....", "#....", "#####"),
+    " ": ("..",) * 7,
+}
 
 
-def find_portrait(user):
-    for ext in ("png", "jpg", "jpeg", "webp"):
-        p = ROOT / "assets" / f"portrait.{ext}"
-        if p.exists():
-            return p
-    try:  # fall back to the GitHub avatar
-        tmp = ROOT / "assets" / "_avatar.png"
-        urllib.request.urlretrieve(f"https://github.com/{user}.png?size=500", tmp)
-        return tmp
-    except Exception:
-        return None
+def word_dots(word):
+    """(col, row) of every lit dot in `word`, plus its width in columns."""
+    dots, x = [], 0
+    for ch in word:
+        g = GLYPHS[ch]
+        dots += [(x + c, r) for r, row in enumerate(g) for c, v in enumerate(row) if v == "#"]
+        x += len(g[0]) + 1
+    return dots, x - 1
 
 
-def ascii_lines(path, max_cols, max_rows, cw, ch):
-    from PIL import Image, ImageOps, ImageFilter, ImageStat
-    im = Image.open(path)
-    if im.mode in ("RGBA", "LA"):
-        bg = Image.new("RGBA", im.size, (0, 0, 0, 255)); bg.alpha_composite(im.convert("RGBA")); im = bg
-    im = im.convert("L")
-    w, h = im.size
-    cols = max_cols
-    rows = int(cols * h / w * (cw / ch))
-    if rows > max_rows:
-        rows = max_rows
-        cols = int(rows * w / h * (ch / cw))
-    from PIL import ImageChops
-    big = im.resize((cols * 4, rows * 4), Image.LANCZOS)
-    small = im.resize((cols * 2, rows * 2), Image.LANCZOS)
-    inv = os.environ.get("PORTRAIT_INVERT", "auto")
-    light_bg = ImageStat.Stat(small).mean[0] > 120
-    edges = ImageOps.autocontrast(big.filter(ImageFilter.GaussianBlur(1.2)).filter(ImageFilter.FIND_EDGES), cutoff=1)
-    edges = edges.resize((cols * 2, rows * 2), Image.LANCZOS)
-    if inv == "1" or (inv == "auto" and light_bg):
-        # light background: separate the subject (dark pixels), drop the background,
-        # and equalise contrast inside the subject so features survive.
-        blur = small.filter(ImageFilter.GaussianBlur(1.5))
-        hist = blur.histogram()
-        tot, sum_all = sum(hist), sum(i * h for i, h in enumerate(hist))
-        wb = sb = 0; best, thr = -1, 128
-        for i in range(256):
-            wb += hist[i]
-            if wb == 0 or wb == tot:
+def typed_cmd(anim, x, y, prefix, cmd, t0, dt, t_end):
+    """A prompt whose command is typed out one character at a time."""
+    cw = 6.0  # fixed advance per character, so the typing lines up in any monospace font
+    o = [f'<text x="{x}" y="{y}" class="cmd pre" textLength="{len(prefix)*cw:.1f}" '
+         f'lengthAdjust="spacing">{e(prefix)}</text>']
+    x0 = x + (len(prefix) + 1) * cw
+    for i, ch in enumerate(cmd):
+        if ch != " ":
+            c = anim.cls("step", t0 + (i + 1) * dt)
+            o.append(f'<text x="{x0+i*cw:.1f}" y="{y}" class="cmd {c}">{e(ch)}</text>')
+    if not anim.static:  # the cursor moves along while typing, then hides once the output appears
+        for k in range(len(cmd) + 1):
+            end = t0 + (k + 1) * dt if k < len(cmd) else t_end
+            c = anim.cls("step", t0 + k * dt, e=round(end, 2), final=False)
+            o.append(f'<rect x="{x0+k*cw:.1f}" y="{y-8}" width="5.5" height="10" fill="#3fb950" class="{c}"/>')
+    return "".join(o)
+
+
+def name_board(anim, x, y, w, h):
+    """BANNER lit up in green on a contribution-graph grid. Returns (defs, body)."""
+    pitch, cell = 10, 8
+    cols, rows = (w + pitch - cell) // pitch, (h + pitch - cell) // pitch
+    gx = x + (w - (cols * pitch - (pitch - cell))) / 2
+    gy = y + (h - (rows * pitch - (pitch - cell))) / 2
+    # lay the lines out, centred, with 3 empty rows between them
+    lit = {}  # (col, row) -> (line, col within the line)
+    span = 7 * len(BANNER) + 3 * (len(BANNER) - 1)  # grid rows the text covers
+    top = (rows - span) // 2
+    for li, word in enumerate(BANNER):
+        dots, width = word_dots(word)
+        left = (cols - width) // 2
+        for c, r in dots:
+            lit[(left + c, top + li * 10 + r)] = (li, c)
+    rnd = random.Random(11)  # fixed seed: the board looks the same on every run
+    dim, bright = (3, 3, 3, 4), (3, 4, 4, 4)  # the last line (the name) is brightest
+
+    def at(c, r):
+        return f'x="{gx+c*pitch:.1f}" y="{gy+r*pitch:.1f}" width="{cell}" height="{cell}" rx="1.5"'
+
+    defs = [f'<pattern id="nbg" x="{gx:.1f}" y="{gy:.1f}" width="{pitch}" height="{pitch}" patternUnits="userSpaceOnUse">'
+            f'<rect width="{cell}" height="{cell}" rx="1.5" fill="{LEVELS[0]}"/></pattern>']
+    body = [f'<rect x="{gx:.1f}" y="{gy:.1f}" width="{cols*pitch}" height="{rows*pitch}" fill="url(#nbg)" '
+            f'class="{anim.cls("fade", 0.5, 2)}"/>']
+    # sparse dim "contributions" in the background, kept 2 cells clear of the letters
+    near = range(-2, 3)
+    for r in range(rows):
+        for c in range(cols):
+            if rnd.random() > 0.06 or any((c + dc, r + dr) in lit for dc in near for dr in near):
                 continue
-            sb += i * hist[i]
-            m1, m2 = sb / wb, (sum_all - sb) / (tot - wb)
-            v = wb * (tot - wb) * (m1 - m2) ** 2
-            if v > best:
-                best, thr = v, i
-        thr = max(thr, 165)  # keep mid-tone skin; only drop the bright background
-        mask = blur.point(lambda p: 255 if p < thr else 0).filter(ImageFilter.MaxFilter(3)).filter(ImageFilter.MinFilter(5)).filter(ImageFilter.MaxFilter(3))
-        tone = ImageOps.autocontrast(ImageOps.invert(small), cutoff=2)
-        tone = tone.point(lambda p: int(255 * max(0.0, (p - 120) / 135) ** 0.9))  # hair stays dense, skin goes light
-        tone = ImageChops.multiply(tone, mask)
-        edges = ImageChops.multiply(edges, mask.filter(ImageFilter.MaxFilter(3)))
-        im = Image.blend(tone, edges, 0.62)
-    else:
-        tone = ImageOps.autocontrast(small, cutoff=3)
-        im = Image.blend(tone, edges, 0.45)
-    im = ImageOps.autocontrast(im, cutoff=1).resize((cols, rows), Image.LANCZOS)
-    px = im.load()
-    out = []
-    for y in range(rows):
-        row = ""
-        for x in range(cols):
-            v = max(0.0, (px[x, y] / 255 - 0.12) / 0.88) ** 1.6
-            row += RAMP[min(len(RAMP) - 1, int(v * len(RAMP)))]
-        out.append(row)
-    return out, cols
+            body.append(f'<rect {at(c, r)} fill="{LEVELS[1]}" '
+                        f'class="{anim.cls("fade", 2 + (c + r) * 0.12, 1.0)}"/>')
+    # the letters: swept in column by column, one line after the other
+    clip = []
+    for (c, r), (li, lc) in sorted(lit.items()):
+        fill = LEVELS[rnd.choice(bright if li == len(BANNER) - 1 else dim)]
+        cl = anim.cls("pop", 13 + li * 8 + lc * 0.4, 2.5, fill=fill)
+        body.append(f'<rect {at(c, r)} fill="{fill}" class="{cl}"/>')
+        clip.append(f'<rect {at(c, r)}/>')
+    if not anim.static:  # a diagonal shine passes over the name once per loop
+        k, band = math.tan(math.radians(20)), 50
+        y0, y1 = gy + top * pitch - 10, gy + (top + span) * pitch + 10
+        sx = gx - band + k * y0 - 5
+        dx = round(gx + cols * pitch - sx + k * y1 + 5)
+        defs.append('<linearGradient id="nsh"><stop offset="0" stop-color="#fff" stop-opacity="0"/>'
+                    '<stop offset=".5" stop-color="#fff" stop-opacity=".55"/>'
+                    '<stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>'
+                    f'<clipPath id="nclip">{"".join(clip)}</clipPath>')
+        body.append(f'<g clip-path="url(#nclip)"><g transform="skewX(-20)">'
+                    f'<rect x="{sx:.1f}" y="{y0:.1f}" width="{band}" height="{y1-y0:.1f}" fill="url(#nsh)" '
+                    f'class="{anim.sweep(50, 60, dx)}"/></g></g>')
+    return "".join(defs), "".join(body)
 
 
 # ------------------------------------------------------- whoami.svg ----
@@ -300,12 +337,12 @@ def steps_for(v, fmt=lambda n: f"{n:,}"):
     return out
 
 
-def build_whoami(st, anim, handle, name, portrait):
+def build_whoami(st, anim, handle, name):
     H = 458
     px, pw = 12, 399          # left window
     rx_, rw = 419, 399        # right window
     parts = [f'<rect x="0.5" y="0.5" width="{W-1}" height="{H+11}" rx="4" fill="#0d1117" stroke="#30363d"/>']
-    for x, title in ((px, f"{handle}@github: ~ -l ./portrait.sh"), (rx_, f"{handle}@github: ~ -l ./stats.sh")):
+    for x, title in ((px, f"{handle}@github: ~ -l ./name.sh"), (rx_, f"{handle}@github: ~ -l ./stats.sh")):
         w = pw
         parts.append(f'<rect x="{x}" y="12" width="{w}" height="{H-12}" rx="6" fill="#0d1117" stroke="#30363d"/>')
         parts.append(f'<line x1="{x}" y1="36" x2="{x+w}" y2="36" stroke="#21262d"/>')
@@ -313,24 +350,10 @@ def build_whoami(st, anim, handle, name, portrait):
             parts.append(f'<circle cx="{x+14+i*12}" cy="24" r="3.2" fill="{col}"/>')
         parts.append(f'<text x="{x+w/2}" y="27" text-anchor="middle" class="ttl">{e(title)}</text>')
 
-    # ---- left: ASCII portrait
-    cw, ch = 3.1, 5.9
-    area_x, area_y, area_w, area_h = px + 12, 44, pw - 24, 376
-    if portrait:
-        lines, cols = ascii_lines(portrait, int(area_w / cw), int(area_h / ch), cw, ch)
-        ox = area_x + (area_w - cols * cw) / 2
-        oy = area_y + (area_h - len(lines) * ch) / 2
-        n = len(lines)
-        for i, ln in enumerate(lines):
-            s = ln.rstrip()
-            lead = len(s) - len(s.lstrip())
-            body = s.lstrip()
-            if not body:
-                continue
-            c = anim.cls("fade", 8 + (i / n) * 32, 0.9)
-            parts.append(f'<text x="{ox+lead*cw:.2f}" y="{oy+(i+1)*ch:.2f}" font-size="{ch*0.95:.2f}" '
-                         f'textLength="{len(body)*cw:.2f}" lengthAdjust="spacing" xml:space="preserve" '
-                         f'fill="#c9d1d9" class="asc {c}">{e(body)}</text>')
+    # ---- left: "I AM NAVEEN" typed as a command, then lit up on a contribution grid
+    parts.append(typed_cmd(anim, px + 14, 58, f"{handle}@github:~$", f'echo "{" ".join(BANNER)}"', 2, 0.55, 13))
+    defs, board = name_board(anim, px + 12, 70, pw - 24, 348)
+    parts.append(board)
     parts.append(f'<line x1="{px}" y1="426" x2="{px+pw}" y2="426" stroke="#21262d"/>')
     prompt = f"{handle}@github:~$ whoami  {name}"
     parts.append(f'<text x="{px+12}" y="445" class="prm">{e(handle)}@github:~$ <tspan fill="#e6edf3">whoami</tspan>'
@@ -380,11 +403,12 @@ def build_whoami(st, anim, handle, name, portrait):
         parts.append(f'<text x="{bx+bw/2:.1f}" y="{base+14}" text-anchor="middle" class="mon">{dt.date(yr,mo,1).strftime("%b")[0]}</text>')
 
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H+12}" viewBox="0 0 {W} {H+12}" '
-            f'role="img" aria-label="ASCII portrait and GitHub stats">'
+            f'role="img" aria-label="{e(" ".join(BANNER))} name animation and GitHub stats">'
             f'<style>text{{font-family:{FONT}}}.ttl{{font-size:9px;fill:#6e7681}}.lab{{font-size:9.5px;fill:#8b949e}}'
             f'.big{{font-size:26px;font-weight:700}}.unit{{font-size:11px;fill:#8b949e}}.sub{{font-size:9px;fill:#6e7681}}'
             f'.prm{{font-size:9px;fill:#8b949e}}.mon{{font-size:9px;fill:#6e7681}}.pk{{font-size:10px;font-weight:700;fill:#e6edf3}}'
-            f'{anim.style()}</style>' + "".join(parts) + "</svg>")
+            f'.cmd{{font-size:10px;fill:#e6edf3}}.pre{{fill:#8b949e}}'
+            f'{anim.style()}</style><defs>{defs}</defs>' + "".join(parts) + "</svg>")
 
 
 # ----------------------------------------------------------------- main ----
@@ -407,11 +431,7 @@ def main():
     st = compute_stats(weeks)
     out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
     (out / "contributions.svg").write_text(build_contributions(weeks, st, Anim(a.static), handle), encoding="utf-8")
-    portrait = find_portrait(user)
-    (out / "whoami.svg").write_text(build_whoami(st, Anim(a.static), handle, name, portrait), encoding="utf-8")
-    tmp = ROOT / "assets" / "_avatar.png"
-    if tmp.exists():
-        tmp.unlink()
+    (out / "whoami.svg").write_text(build_whoami(st, Anim(a.static), handle, name), encoding="utf-8")
     print(f"OK: {st['total']} contributions, streak {st['current']}d, wrote SVGs to {out}")
 
 

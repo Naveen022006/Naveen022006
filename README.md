@@ -21,3 +21,4 @@
 <a href="mailto:kanagunaveen21@gmail.com"><img src="https://img.shields.io/badge/EMAIL-kanagunaveen21@gmail.com-D14836?style=for-the-badge&labelColor=555555&logo=gmail&logoColor=white" alt="Email" /></a>
 
 </div>
+

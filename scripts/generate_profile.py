@@ -25,7 +25,9 @@ FLASH = "#aff5b4"  # colour a name dot flashes before settling to its green
 
 # ----------------------------------------------------------------- data ----
 QUERY = """query($login:String!){user(login:$login){contributionsCollection{
-contributionCalendar{totalContributions weeks{contributionDays{date contributionCount weekday}}}}}}"""
+contributionCalendar{totalContributions weeks{contributionDays{date contributionCount weekday contributionLevel}}}}}}"""
+# GitHub's own heatmap shade for each day, so our colours match the profile graph
+GH_LEVEL = {"NONE": 0, "FIRST_QUARTILE": 1, "SECOND_QUARTILE": 2, "THIRD_QUARTILE": 3, "FOURTH_QUARTILE": 4}
 
 
 def fetch(login, token):
@@ -39,8 +41,8 @@ def fetch(login, token):
     if data.get("errors") or not data["data"]["user"]:
         raise SystemExit(f"GitHub API error: {data.get('errors')}")
     cal = data["data"]["user"]["contributionsCollection"]["contributionCalendar"]
-    return [[(d["date"], d["contributionCount"], d["weekday"]) for d in w["contributionDays"]]
-            for w in cal["weeks"]]
+    return [[(d["date"], d["contributionCount"], d["weekday"], GH_LEVEL[d["contributionLevel"]])
+             for d in w["contributionDays"]] for w in cal["weeks"]]
 
 
 def mock_weeks():
@@ -58,11 +60,12 @@ def mock_weeks():
         d += dt.timedelta(days=1)
     if cur:
         weeks.append(cur)
-    return weeks
+    mx = max(n for w in weeks for _, n, _ in w)
+    return [[(d, n, wd, level_of(n, mx)) for d, n, wd in w] for w in weeks]
 
 
 def compute_stats(weeks):
-    days = [(dt.date.fromisoformat(d), c) for w in weeks for d, c, _ in w]
+    days = [(dt.date.fromisoformat(d), c) for w in weeks for d, c, _, _ in w]
     days.sort()
     total = sum(c for _, c in days)
     active = sum(1 for _, c in days if c > 0)
@@ -92,10 +95,14 @@ def compute_stats(weeks):
     months = {}
     for d, c in days:
         months[(d.year, d.month)] = months.get((d.year, d.month), 0) + c
-    mkeys = sorted(months)
+    # the 365-day window touches 13 calendar months (this month appears at both ends),
+    # so chart the 12 months ending with the current one, oldest first
+    end = days[-1][0]
+    mkeys = [divmod(end.year * 12 + end.month - 1 - k, 12) for k in range(11, -1, -1)]
+    mkeys = [(y, m + 1) for y, m in mkeys]
     return dict(days=days, total=total, active=active, n_days=len(days), best=best,
                 longest=longest, l_range=l_range, current=cs, c_range=c_range,
-                months=[(k, months[k]) for k in mkeys])
+                months=[(k, months.get(k, 0)) for k in mkeys])
 
 
 def fmt_d(d):
@@ -184,7 +191,6 @@ def build_contributions(weeks, st, anim, handle):
     cell, gap = 11, 3
     pitch = cell + gap
     x0, y0 = 58, 38
-    mx = max(c for _, c, _ in [x for w in weeks for x in w])
     parts = []
     last_label_col, last_month = -10, None
     for ci, w in enumerate(weeks):
@@ -194,11 +200,11 @@ def build_contributions(weeks, st, anim, handle):
             last_label_col, last_month = ci, d0.month
         elif d0.month != last_month:
             last_month = d0.month
-        for date, cnt, wd in w:
+        for date, cnt, wd, lv in w:
             diag = ci + wd * 2
             c = anim.cls("fade", 3 + diag * 0.26, 1.0)
             parts.append(f'<rect x="{x0+ci*pitch}" y="{y0+wd*pitch}" width="{cell}" height="{cell}" '
-                         f'rx="2" fill="{LEVELS[level_of(cnt, mx)]}" class="{c}"/>')
+                         f'rx="2" fill="{LEVELS[lv]}" class="{c}"/>')
     for r, lab in ((1, "Mon"), (3, "Wed"), (5, "Fri")):
         parts.append(f'<text x="24" y="{y0+r*pitch+9}" class="mut">{lab}</text>')
     cap = anim.cls("fade", 24, 2)
@@ -331,7 +337,7 @@ def steps_for(v, fmt=lambda n: f"{n:,}"):
     fr = [0.15, 0.4, 0.65, 0.85, 1.0]
     out = []
     for f in fr:
-        n = int(round(v * f))
+        n = v * f if isinstance(v, float) else int(round(v * f))
         out.append(fmt(n))
     out[-1] = fmt(v)
     return out
@@ -388,25 +394,29 @@ def build_whoami(st, anim, handle, name):
     inner_x, inner_w = cx1 + 16, (cx2 + cwid - cx1) - 32
     pitch = inner_w / len(months)
     bw = pitch * 0.68
-    base = cy + chh2 - 24
-    maxh = chh2 - 24 - 50
+    base = cy + chh2 - 32
+    maxh = chh2 - 32 - 50
+    parts.append(f'<line x1="{inner_x}" y1="{base+.5}" x2="{inner_x+inner_w}" y2="{base+.5}" stroke="#30363d"/>')
     for i, ((yr, mo), v) in enumerate(months):
-        hh = max(3, v / mx * maxh)
         bx = inner_x + i * pitch + (pitch - bw) / 2
-        c = anim.cls("grow", 30 + i * 1.1, 3.0)
-        top = v == mx
-        parts.append(f'<rect x="{bx:.1f}" y="{base-hh:.1f}" width="{bw:.1f}" height="{hh:.1f}" rx="2" '
-                     f'fill="{"#39d353" if top else "#2ea043"}" class="{c}"/>')
-        if top:
-            c2 = anim.cls("fade", 38, 1.5)
-            parts.append(f'<text x="{bx+bw/2:.1f}" y="{base-hh-6:.1f}" text-anchor="middle" class="pk {c2}">{v:,}</text>')
-        parts.append(f'<text x="{bx+bw/2:.1f}" y="{base+14}" text-anchor="middle" class="mon">{dt.date(yr,mo,1).strftime("%b")[0]}</text>')
+        if v > 0:  # an empty month gets no bar, only the baseline
+            hh = max(2, v / mx * maxh)
+            c = anim.cls("grow", 30 + i * 1.1, 3.0)
+            top = v == mx
+            parts.append(f'<rect x="{bx:.1f}" y="{base-hh:.1f}" width="{bw:.1f}" height="{hh:.1f}" rx="2" '
+                         f'fill="{"#39d353" if top else "#2ea043"}" class="{c}"/>')
+            if top:
+                c2 = anim.cls("fade", 38, 1.5)
+                parts.append(f'<text x="{bx+bw/2:.1f}" y="{base-hh-6:.1f}" text-anchor="middle" class="pk {c2}">{v:,}</text>')
+        parts.append(f'<text x="{bx+bw/2:.1f}" y="{base+13}" text-anchor="middle" class="mon">{dt.date(yr,mo,1).strftime("%b")}</text>')
+        if i == 0 or mo == 1:  # mark where each year starts
+            parts.append(f'<text x="{bx+bw/2:.1f}" y="{base+24}" text-anchor="middle" class="yr">{yr}</text>')
 
     return (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H+12}" viewBox="0 0 {W} {H+12}" '
             f'role="img" aria-label="{e(" ".join(BANNER))} name animation and GitHub stats">'
             f'<style>text{{font-family:{FONT}}}.ttl{{font-size:9px;fill:#6e7681}}.lab{{font-size:9.5px;fill:#8b949e}}'
             f'.big{{font-size:26px;font-weight:700}}.unit{{font-size:11px;fill:#8b949e}}.sub{{font-size:9px;fill:#6e7681}}'
-            f'.prm{{font-size:9px;fill:#8b949e}}.mon{{font-size:9px;fill:#6e7681}}.pk{{font-size:10px;font-weight:700;fill:#e6edf3}}'
+            f'.prm{{font-size:9px;fill:#8b949e}}.mon{{font-size:9px;fill:#6e7681}}.yr{{font-size:8px;fill:#484f58}}.pk{{font-size:10px;font-weight:700;fill:#e6edf3}}'
             f'.cmd{{font-size:10px;fill:#e6edf3}}.pre{{fill:#8b949e}}'
             f'{anim.style()}</style><defs>{defs}</defs>' + "".join(parts) + "</svg>")
 
